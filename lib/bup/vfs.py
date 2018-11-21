@@ -266,8 +266,9 @@ Root = namedtuple('Root', ('meta'))
 Tags = namedtuple('Tags', ('meta'))
 RevList = namedtuple('RevList', ('meta', 'oid'))
 Commit = namedtuple('Commit', ('meta', 'oid', 'coid'))
+RevListSubdir = namedtuple('RevListSubdir', ('meta', 'prefix'))
 
-item_types = frozenset((Item, Chunky, Root, Tags, RevList, Commit))
+item_types = frozenset((Item, Chunky, Root, Tags, RevList, Commit, RevListSubdir))
 real_tree_types = frozenset((Item, Commit))
 
 def write_item(port, item):
@@ -567,6 +568,19 @@ def _revlist_item_from_oid(repo, oid, require_meta):
     commit = _commit_item_from_oid(repo, oid, require_meta)
     return RevList(oid=oid, meta=commit.meta)
 
+def yield_git_ref_names(repo, pfx, want_meta) :
+  dirs = set()
+  for name, oid in tuple(repo.refs([], limit_to_heads=True)):
+      if not name.startswith(pfx) : continue
+      name = name[len(pfx):]
+      splitname = name.split("/")
+      if len(splitname) > 1 :
+        if splitname[0] in dirs: continue
+        dirs.add(splitname[0])
+        yield splitname[0], RevListSubdir(default_dir_mode, pfx + splitname[0] + "/")
+      else :
+        yield name, _revlist_item_from_oid(repo, oid, want_meta)
+
 def root_items(repo, names=None, want_meta=True):
     """Yield (name, item) for the items in '/' in the VFS.  Return
     everything if names is logically false, otherwise return only
@@ -582,9 +596,7 @@ def root_items(repo, names=None, want_meta=True):
         # FIXME: maybe eventually support repo.clone() or something
         # and pass in two repos, so we can drop the tuple() and stream
         # in parallel (i.e. meta vs refs).
-        for name, oid in tuple(repo.refs([], limit_to_heads=True)):
-            assert(name.startswith('refs/heads/'))
-            yield name[11:], _revlist_item_from_oid(repo, oid, want_meta)
+        for i in yield_git_ref_names(repo, 'refs/heads/', want_meta): yield i
         return
 
     if '.' in names:
@@ -598,6 +610,12 @@ def root_items(repo, names=None, want_meta=True):
         oidx, typ, size = next(it)
         if not oidx:
             for _ in it: pass
+            pfx = 'refs/heads/' + ref + '/'
+            try :
+                it = next(yield_git_ref_names(repo, pfx, False))
+                yield ref, RevListSubdir(default_dir_mode, pfx)
+            except StopIteration :
+                pass
             continue
         assert typ == 'commit'
         commit = parse_commit(''.join(it))
@@ -792,6 +810,19 @@ def revlist_items(repo, oid, names):
         if commit:
             yield name, commit
 
+def revlistsub_items(repo, prefix, names, want_meta):
+    if not names:
+        for i in yield_git_ref_names(repo, prefix, want_meta): yield i
+        return
+
+    names = set(names)
+    if '.' in names:
+        yield '.', RevListSubdir(default_dir_mode, prefix)
+    names.remove('.')
+    for (n, i) in yield_git_ref_names(repo, prefix, want_meta):
+        if n in names :
+            yield n, i
+
 def tags_items(repo, names):
     global _tags
 
@@ -883,6 +914,8 @@ def contents(repo, item, names=None, want_meta=True):
             item_gen = tree_items(item.oid, data, names)
     elif item_t == RevList:
         item_gen = revlist_items(repo, item.oid, names)
+    elif item_t == RevListSubdir:
+        item_gen = revlistsub_items(repo, item.prefix, names, want_meta)
     elif item_t == Root:
         item_gen = root_items(repo, names, want_meta)
     elif item_t == Tags:
