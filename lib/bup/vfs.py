@@ -896,7 +896,7 @@ def _resolve_path(repo, path, parent=None, want_meta=True, follow=True):
     cache_key = b'res:%d%d%d:%s\0%s' \
                 % (bool(want_meta), bool(follow), repo.id(),
                    ('/'.join(x[0] for x in parent) if parent else ''),
-                   '/'.join(path))
+                   path)
     resolution = cache_get(cache_key)
     if resolution:
         return resolution
